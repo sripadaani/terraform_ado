@@ -2,105 +2,91 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "=2.46.0"
+      version = "=3.0.0"
     }
   }
 }
 
 # Configure the Microsoft Azure Provider
 provider "azurerm" {
-  features {}  
+  features {}
+
+  subscription_id = "${var.azure_subscription_id}"
+  tenant_id       = "${var.azure_tenant_id}"
+  client_id       = "${var.azure_client_id}"
+  client_secret   = "${var.azure_client_secret}"
 }
 
-terraform {
-  backend "azurerm" {
-    storage_account_name = "__terraformstorageaccount__"
-    container_name       = "tfstate"
-    key                  = "terraform.tfstate"
-
-    # rather than defining this inline, the Access Key can also be sourced
-    # from an Environment Variable - more information is available below.
-    access_key = "__storagekey__"
-    features {}
-  }
+resource "azurerm_resource_group" "test-rg1" {
+  name     = "${var.azure_rg_name}"
+  location = "${var.azure_location}"
+}
+resource "azurerm_virtual_network" "test-Vnet" {
+  name                = "${var.azure_vnet_name}"
+  address_space       = ["${var.address_space}"]
+  location            = "${azurerm_resource_group.test-rg1.location}"
+  resource_group_name = "${azurerm_resource_group.test-rg1.name}"
 }
 
-
-resource "azurerm_resource_group" "rg" {
-  name     = "${var.rgname}"
-  location = "${var.rglocation}"
+resource "azurerm_subnet" "test-Subnet" {
+  name                 = "${var.azure_subnet_name}"
+  resource_group_name  = "${azurerm_resource_group.test-rg1.name}"
+  virtual_network_name = "${azurerm_virtual_network.test-Vnet.name}"
+  address_prefixes     = ["${var.address_prefixes}"]
 }
-
-resource "azurerm_virtual_network" "vnet1" {
-  name                = "${var.prefix}-10"
-  resource_group_name = "${azurerm_resource_group.rg.name}"
-  location            = "${azurerm_resource_group.rg.location}"
-  address_space       = ["${var.vnet_cidr_prefix}"]
+resource "azurerm_public_ip" "pubip" {
+  name                = "test-publicip"
+  resource_group_name = azurerm_resource_group.test-rg1.name
+  location            = azurerm_resource_group.test-rg1.location
+  allocation_method   = "Dynamic"
 }
-
-resource "azurerm_subnet" "subnet1" {
-  name                 = "subnet1"
-  virtual_network_name = "${azurerm_virtual_network.vnet1.name}"
-  resource_group_name  = "${azurerm_resource_group.rg.name}"
-  address_prefixes     = ["${var.subnet1_cidr_prefix}"]
-}
-
-resource "azurerm_network_security_group" "nsg1" {
-  name                = "${var.prefix}-nsg1"
-  resource_group_name = "${azurerm_resource_group.rg.name}"
-  location            = "${azurerm_resource_group.rg.location}"
-}
-
-# NOTE: this allows RDP from any network
-resource "azurerm_network_security_rule" "rdp" {
-  name                        = "rdp"
-  resource_group_name         = "${azurerm_resource_group.rg.name}"
-  network_security_group_name = "${azurerm_network_security_group.nsg1.name}"
-  priority                    = 102
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "3389"
-  source_address_prefix       = "*"
-  destination_address_prefix  = "*"
-}
-
-resource "azurerm_subnet_network_security_group_association" "nsg_subnet_assoc" {
-  subnet_id                 = azurerm_subnet.subnet1.id
-  network_security_group_id = azurerm_network_security_group.nsg1.id
-}
-
-resource "azurerm_network_interface" "nic1" {
-  name                = "${var.prefix}-nic"
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
+resource "azurerm_network_interface" "test-Nic" {
+  name                = "${var.azure_nic}"
+  location            = azurerm_resource_group.test-rg1.location
+  resource_group_name = azurerm_resource_group.test-rg1.name
 
   ip_configuration {
-    name                          = "internal"
-    subnet_id                     = azurerm_subnet.subnet1.id
+    name                          = "prodconfiguration1"
+    subnet_id                     = azurerm_subnet.test-Subnet.id
     private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.pubip.id  
   }
 }
 
-resource "azurerm_windows_virtual_machine" "main" {
-  name                            = "${var.prefix}-vmt01"
-  resource_group_name             = azurerm_resource_group.rg.name
-  location                        = azurerm_resource_group.rg.location
-  size                            = "Standard_B1s"
-  admin_username                  = "adminuser"
-  admin_password                  = "P@ssw0rd1234!"
-  network_interface_ids = [ azurerm_network_interface.nic1.id ]
+resource "azurerm_virtual_machine" "test-Vm" {
+  name                  = "${var.azure_vm}"
+  location              = azurerm_resource_group.test-rg1.location
+  resource_group_name   = azurerm_resource_group.test-rg1.name
+  network_interface_ids = [azurerm_network_interface.test-Nic.id]
+  vm_size               = "Standard_DS1_v2"
 
-  source_image_reference {
-    publisher = "MicrosoftWindowsServer"
-    offer     = "WindowsServer"
-    sku       = "2012-R2-Datacenter"
+  # Uncomment this line to delete the OS disk automatically when deleting the VM
+  # delete_os_disk_on_termination = true
+
+  # Uncomment this line to delete the data disks automatically when deleting the VM
+  # delete_data_disks_on_termination = true
+
+  storage_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "16.04-LTS"
     version   = "latest"
   }
-
-  os_disk {
-    storage_account_type = "Standard_LRS"
-    caching              = "ReadWrite"
+  storage_os_disk {
+    name              = "myosdisk1"
+    caching           = "ReadWrite"
+    create_option     = "FromImage"
+    managed_disk_type = "Standard_LRS"
+  }
+  os_profile {
+    computer_name  = "hostname"
+    admin_username = "testadmin"
+    admin_password = "Password1234!"
+  }
+  os_profile_linux_config {
+    disable_password_authentication = false
+  }
+  tags = {
+    environment = "staging"
   }
 }
